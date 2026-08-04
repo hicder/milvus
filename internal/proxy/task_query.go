@@ -18,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/accesslog"
 	"github.com/milvus-io/milvus/internal/proxy/channelmgr"
 	"github.com/milvus-io/milvus/internal/proxy/fieldvalidator"
+	"github.com/milvus-io/milvus/internal/proxy/rls"
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
@@ -81,6 +82,8 @@ type queryTask struct {
 	actualChannelsMvcc *typeutil.ConcurrentMap[string, uint64]
 	preferredNodes     map[string]int64
 	fastSkip           bool
+	skipRuntimeRLS     bool
+	preserveRawFields  bool
 
 	reQuery              bool
 	allQueryCnt          int64
@@ -776,8 +779,31 @@ func (t *queryTask) PreExecute(ctx context.Context) error {
 	}
 	t.resolvedTimezoneStr = timezone
 
-	if err := t.createPlanArgs(ctx, &planparserv2.ParserVisitorArgs{Timezone: t.resolvedTimezoneStr}); err != nil {
+	visitorArgs := &planparserv2.ParserVisitorArgs{Timezone: t.resolvedTimezoneStr}
+	if err := t.createPlanArgs(ctx, visitorArgs); err != nil {
 		return err
+	}
+	userPlanAlwaysTrue := planparserv2.IsAlwaysTruePlan(t.plan)
+
+	if !t.skipRuntimeRLS {
+		rlsEnabled, err := resolveRLSEnforcement(ctx, t.GetMetaCache(), colInfo.RlsEnabled, colInfo.RlsForce, t.request.GetSkipRls(),
+			t.request.GetDbName(), t.request.GetCollectionName(), "query")
+		if err != nil {
+			return err
+		}
+		principalName, enforceRLS, err := rls.ResolveRuntimePrincipal(rlsEnabled, t.request.GetRlsPrincipal(), "query")
+		if err != nil {
+			return err
+		}
+		if enforceRLS {
+			predicate, err := rls.ResolveUsingPredicate(ctx, t.CollectionID, principalName, rls.QueryAction(t.queryParams.isIterator), t.schema.SchemaHelper)
+			if err != nil {
+				return err
+			}
+			if err := rls.MergePredicateToPlan(t.plan, predicate); err != nil {
+				return err
+			}
+		}
 	}
 	t.plan.GetQuery().Limit = t.Limit
 	if t.queryParams.queryIteratorCursor != nil {
@@ -790,7 +816,7 @@ func (t *queryTask) PreExecute(ctx context.Context) error {
 	// Both are safe without a limit, so exempt them from the limit requirement.
 	hasAgg := len(t.userAggregates) > 0
 
-	if planparserv2.IsAlwaysTruePlan(t.plan) && t.Limit == typeutil.Unlimited && !hasAgg {
+	if userPlanAlwaysTrue && t.Limit == typeutil.Unlimited && !hasAgg {
 		return merr.WrapErrParameterInvalidMsg("empty expression should be used with limit")
 	}
 
@@ -1057,24 +1083,31 @@ func (t *queryTask) PostExecute(ctx context.Context) error {
 		// first page for iteration, need to set up sessionTs for iterator
 		t.result.SessionTs = getMaxMvccTsFromChannels(t.channelsMvcc, t.BeginTs())
 	}
-	if !t.reQuery {
-		if len(t.queryParams.extractTimeFields) > 0 {
-			log.Debug(ctx, "extracting fields for timestamptz", mlog.Strings("fields", t.queryParams.extractTimeFields))
-			err = extractFieldsFromResults(t.result.GetFieldsData(), t.resolvedTimezoneStr, t.queryParams.extractTimeFields)
-			if err != nil {
-				log.Warn(ctx, "fail to extract fields for timestamptz", mlog.Err(err))
-				return err
-			}
-		} else {
-			log.Debug(ctx, "translate timestamp to ISO string", mlog.String("timezone", t.resolvedTimezoneStr))
-			err = timestamptzUTC2IsoStr(t.result.GetFieldsData(), t.resolvedTimezoneStr)
-			if err != nil {
-				log.Warn(ctx, "fail to translate timestamp", mlog.Err(err))
-				return err
-			}
-		}
+	if err := t.formatTimeFields(ctx); err != nil {
+		return err
 	}
 	log.Debug(ctx, "Query PostExecute done")
+	return nil
+}
+
+func (t *queryTask) formatTimeFields(ctx context.Context) error {
+	if t.reQuery || t.preserveRawFields {
+		return nil
+	}
+	if len(t.queryParams.extractTimeFields) > 0 {
+		mlog.Debug(ctx, "extracting fields for timestamptz", mlog.Strings("fields", t.queryParams.extractTimeFields))
+		if err := extractFieldsFromResults(t.result.GetFieldsData(), t.resolvedTimezoneStr, t.queryParams.extractTimeFields); err != nil {
+			mlog.Warn(ctx, "fail to extract fields for timestamptz", mlog.Err(err))
+			return err
+		}
+		return nil
+	}
+
+	mlog.Debug(ctx, "translate timestamp to ISO string", mlog.String("timezone", t.resolvedTimezoneStr))
+	if err := timestamptzUTC2IsoStr(t.result.GetFieldsData(), t.resolvedTimezoneStr); err != nil {
+		mlog.Warn(ctx, "fail to translate timestamp", mlog.Err(err))
+		return err
+	}
 	return nil
 }
 

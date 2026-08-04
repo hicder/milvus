@@ -42,9 +42,10 @@ type compiledExpression struct {
 }
 
 type compiledPolicyExpression struct {
-	expr           *planpb.Expr
-	needsPrincipal bool
-	tagVariables   map[string]string
+	expr                 *planpb.Expr
+	needsPrincipal       bool
+	tagVariables         map[string]string
+	tagVariableDataTypes map[string][]schemapb.DataType
 }
 
 func compiledExpressionNeedsTags(e *compiledExpression) bool {
@@ -230,10 +231,20 @@ func compilePolicyExprTemplate(schemaHelper *typeutil.SchemaHelper, template pol
 			return nil, merr.WrapErrDataIntegrity(err, "invalid persisted RLS using expression")
 		}
 	}
+	var tagVariableDataTypes map[string][]schemapb.DataType
+	if len(template.tagVariables) > 0 {
+		tagVariableDataTypes = make(map[string][]schemapb.DataType, len(template.tagVariables))
+		for _, variable := range template.tagVariables {
+			dataTypes := make([]schemapb.DataType, 0, 1)
+			collectRLSTemplateDataTypes(parsedExpr, variable, &dataTypes)
+			tagVariableDataTypes[variable] = dataTypes
+		}
+	}
 	return &compiledPolicyExpression{
-		expr:           parsedExpr,
-		needsPrincipal: template.needsPrincipal,
-		tagVariables:   template.tagVariables,
+		expr:                 parsedExpr,
+		needsPrincipal:       template.needsPrincipal,
+		tagVariables:         template.tagVariables,
+		tagVariableDataTypes: tagVariableDataTypes,
 	}, nil
 }
 
@@ -314,7 +325,7 @@ func (e *compiledPolicyExpression) Instantiate(principalName string, principalTa
 		if !ok {
 			return nil, nil
 		}
-		normalizedTagValue, ok = normalizeRLSTagValue(e.expr, variable, tagValue)
+		normalizedTagValue, ok = normalizeRLSTagValue(e.tagVariableDataTypes[variable], tagValue)
 		if !ok {
 			return nil, nil
 		}
@@ -365,9 +376,7 @@ func rlsTemplateColumnDataType(columnInfo *planpb.ColumnInfo) schemapb.DataType 
 // every occurrence of a tag variable in an expression. Numeric conversions are
 // allowed only when they preserve the value exactly; otherwise the policy is
 // treated as not matching instead of risking an over-permissive comparison.
-func normalizeRLSTagValue(expr *planpb.Expr, variable string, value rlsutil.TagValue) (rlsutil.TagValue, bool) {
-	dataTypes := make([]schemapb.DataType, 0, 1)
-	collectRLSTemplateDataTypes(expr, variable, &dataTypes)
+func normalizeRLSTagValue(dataTypes []schemapb.DataType, value rlsutil.TagValue) (rlsutil.TagValue, bool) {
 	if len(dataTypes) == 0 {
 		return rlsutil.TagValue{}, false
 	}

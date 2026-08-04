@@ -40,6 +40,7 @@ import (
 	grpcmixcoordclient "github.com/milvus-io/milvus/internal/distributed/mixcoord/client"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/parser/planparserv2"
 	"github.com/milvus-io/milvus/internal/proxy/channelmgr"
 	"github.com/milvus-io/milvus/internal/proxy/fieldvalidator"
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
@@ -2468,6 +2469,9 @@ func TestRetrieveByPKs_Success(t *testing.T) {
 			query := mockey.Mock((*Proxy).query).To(func(_ *Proxy, _ context.Context, qt *queryTask, _ trace.Span) (*milvuspb.QueryResults, segcore.StorageCost, error) {
 				require.Equal(t, commonpb.ConsistencyLevel_Strong, qt.request.GetConsistencyLevel())
 				require.Equal(t, commonpb.ConsistencyLevel_Strong, qt.GetConsistencyLevel())
+				require.True(t, qt.skipRuntimeRLS)
+				require.True(t, qt.preserveRawFields)
+				require.Equal(t, []string{"*"}, qt.request.GetOutputFields())
 				require.Zero(t, qt.request.GetBase().GetTimestamp())
 				require.Zero(t, qt.request.GetGuaranteeTimestamp())
 				require.Zero(t, qt.GetMvccTimestamp())
@@ -2536,6 +2540,7 @@ func TestRetrieveByPKsUsesStrongQueryForFullAutoID(t *testing.T) {
 	require.Zero(t, captured.GetGuaranteeTimestamp())
 	require.Zero(t, captured.request.GetBase().GetTimestamp())
 	require.False(t, captured.CanSkipAllocTimestamp(), "the Query must obtain its own Strong-read timestamp")
+	require.True(t, captured.skipRuntimeRLS)
 	require.Equal(t, []string{"id"}, captured.request.GetOutputFields())
 	require.Zero(t, captured.GetMvccTimestamp())
 	require.Nil(t, captured.actualChannelsMvcc)
@@ -3386,6 +3391,22 @@ func TestBindPartialUpdateReadTimestampsRequiresCompleteAttempt(t *testing.T) {
 	err = (&upsertTask{}).bindPartialUpdateReadTimestamps(channelReadTs)
 	require.ErrorIs(t, err, merr.ErrServiceInternal)
 	require.ErrorContains(t, err, "CAS candidate write channel groups are empty")
+}
+
+func TestUpsertRetrieveOutputFields(t *testing.T) {
+	schema := createTestSchema()
+	predicate, err := planparserv2.ParseExpr(schema.SchemaHelper, `name == "alice"`, nil)
+	require.NoError(t, err)
+	primaryField, err := typeutil.GetPrimaryFieldSchema(schema.CollectionSchema)
+	require.NoError(t, err)
+
+	outputFields, err := upsertRetrieveOutputFields(schema.SchemaHelper, primaryField, predicate, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"id", "name"}, outputFields)
+
+	outputFields, err = upsertRetrieveOutputFields(schema.SchemaHelper, primaryField, predicate, true)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"*"}, outputFields)
 }
 
 func TestRetrieveByPKs_GetPrimaryFieldSchemaError(t *testing.T) {
