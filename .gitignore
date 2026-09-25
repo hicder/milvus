@@ -48,6 +48,7 @@ proxy-go/proxy-go
 
 # Compiled source
 bin/
+/tests/benchmark/cpu_comparison/benchmark-data/
 lib/
 *.a
 *.so
