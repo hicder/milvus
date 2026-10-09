@@ -109,8 +109,10 @@ This gives developers the repository's compiler and dependency environment while
 
 Install Git, [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), and the [Compose plugin](https://docs.docker.com/compose/install/linux/). Your user must be able to run `docker` commands. The upstream source-build guidance asks for at least 8 GiB RAM and 50 GiB free disk; leave additional space for build caches and benchmark data. Builds download dependencies from public registries and package repositories.
 
+Clone the published benchmark branch from [hicder/milvus](https://github.com/hicder/milvus/tree/nathanwilk7/cpu-benchmarks). Changes awaiting merge are available on the same branch in [nathanwilk7/milvus](https://github.com/nathanwilk7/milvus/tree/nathanwilk7/cpu-benchmarks); use that fork's URL to test those changes before merging them into the published branch.
+
 ```sh
-git clone --branch nathanwilk7/cpu-benchmarks https://github.com/nathanwilk7/milvus.git
+git clone --branch nathanwilk7/cpu-benchmarks https://github.com/hicder/milvus.git
 cd milvus
 
 # AMD/x86-64 host: uname -m should report x86_64.
