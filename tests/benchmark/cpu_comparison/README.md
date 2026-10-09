@@ -36,6 +36,8 @@ Choose a workflow for `setup`/`reset`/`run`, and optionally one case for `run` (
 
 For a large selectivity contrast on the same HNSW collection, run `hnsw512_not_deleted` (95% with the default config) and `hnsw512_subreddit` (1%).
 
+The HNSW512 and HNSW_PRQ384 workflows use inner product (`IP`) and a `STL_SORT` index for `created_time`, matching the production posts metric and timestamp-index choices. The IVF128 workflow keeps `L2`; membership filters keep inverted indexes and `is_deleted` keeps a bitmap index. After upgrading from the L2/inverted-timestamp benchmark, run `reset -workflow hnsw` and/or `reset -workflow prq` to rebuild existing collections before comparing results. Results from the old and new benchmark revisions are not directly comparable, even when their dataset checksums match.
+
 Run overrides: `-duration` (seconds, default 60), `-qps` (queries per second, default 1000), and `-concurrency` (maximum in-flight requests, default 32). Edit `config.json` before setup/reset for dataset size (`rows`, default 200000), filter selectivity, index/search settings, and `warmup_seconds` (default 10, additional to measured duration). Use `-address host:19530` for another Milvus server or `-data PATH` for another bundle/results directory.
 
 `config.json` settings: connection (`address`), collection name (`collection_prefix`), synthetic data and filter distributions (`rows` through `flight_ids`), index construction (`nlist` through `prq_nbits`), search (`queries`, `nprobe`, `ef`, `top_k`), then load generation (`qps` through `timeout_seconds`). `queries` is the size of the held-out query pool, replayed evenly; each request searches one vector. `batch_rows` controls setup inserts. Select workflows/cases with CLI flags. The file is strict JSON without comments.
@@ -56,7 +58,7 @@ The runner announces the start of warmup and measurement. `qps` is the offered a
 
 Long setup and run phases print a brief status about every 30 seconds; short phases stay quiet. Insert progress is reported by rows after a batch completes. These messages do not affect the result JSON.
 
-`recall_at_k` compares one fixed query with exact L2 results; it is a sanity check, not a full recall evaluation. `goos`, `goarch`, and `cpus` describe the **load generator**, not the server. For CPU comparisons, use a separate load generator and repeat runs; profiling adds overhead.
+`recall_at_k` compares one fixed query with exact inner-product results for HNSW/HNSW_PRQ and exact L2 results for IVF; it is a sanity check, not a full recall evaluation. `goos`, `goarch`, and `cpus` describe the **load generator**, not the server. For CPU comparisons, use a separate load generator and repeat runs; profiling adds overhead.
 
 ```sh
 go run ./tests/benchmark/cpu_comparison report -inputs AMD_RUN_DIR,GRAVITON_RUN_DIR -labels m7a.4xlarge,m7g.4xlarge

@@ -47,9 +47,9 @@ func dimension(idx string) int {
 func vectorIndex(c Config, idx string) index.Index {
 	switch idx {
 	case "hnsw512":
-		return index.NewHNSWIndex(entity.L2, c.HNSWM, c.EfConstruction)
+		return index.NewHNSWIndex(entity.IP, c.HNSWM, c.EfConstruction)
 	case "prq384":
-		return index.NewGenericIndex("", map[string]string{"index_type": "HNSW_PRQ", "metric_type": "L2", "M": strconv.Itoa(c.HNSWM), "efConstruction": strconv.Itoa(c.EfConstruction), "nrq": strconv.Itoa(c.PRQNRQ), "m": strconv.Itoa(c.PRQM), "nbits": strconv.Itoa(c.PRQNBits)})
+		return index.NewGenericIndex("", map[string]string{"index_type": "HNSW_PRQ", "metric_type": "IP", "M": strconv.Itoa(c.HNSWM), "efConstruction": strconv.Itoa(c.EfConstruction), "nrq": strconv.Itoa(c.PRQNRQ), "m": strconv.Itoa(c.PRQM), "nbits": strconv.Itoa(c.PRQNBits)})
 	default:
 		return index.NewIvfFlatIndex(entity.L2, c.NList)
 	}
@@ -85,7 +85,7 @@ func prepare(ctx context.Context, cli *milvusclient.Client, d Dataset, replace b
 	switch c.Workflow {
 	case "hnsw", "prq":
 		schema.WithField(entity.NewField().WithName("is_deleted").WithDataType(entity.FieldTypeBool)).WithField(entity.NewField().WithName("created_time").WithDataType(entity.FieldTypeInt64)).WithField(entity.NewField().WithName("subreddit_id").WithDataType(entity.FieldTypeInt64))
-		specs = append(specs, indexSpec{"is_deleted", index.NewBitmapIndex()}, indexSpec{"created_time", index.NewInvertedIndex()})
+		specs = append(specs, indexSpec{"is_deleted", index.NewBitmapIndex()}, indexSpec{"created_time", index.NewSortedIndex()})
 		specs = append(specs, indexSpec{"subreddit_id", index.NewInvertedIndex()})
 	case "ivf":
 		schema.WithField(entity.NewField().WithName("flight_id").WithDataType(entity.FieldTypeInt64)).WithField(entity.NewField().WithName("is_deleted").WithDataType(entity.FieldTypeBool))
@@ -258,9 +258,9 @@ func validate(ctx context.Context, cli *milvusclient.Client, d Dataset, m Manife
 	return nil
 }
 
-func exactRecall(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Case) (float64, error) {
+func exactTopK(d Dataset, cs Case) (map[int64]bool, error) {
 	if len(d.Rows) == 0 {
-		return 0, fmt.Errorf("empty dataset")
+		return nil, fmt.Errorf("empty dataset")
 	}
 	query := queryVector(d, cs.Index, 0)
 	type neighbor struct {
@@ -275,19 +275,37 @@ func exactRecall(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Ca
 		v := rowVector(row, cs.Index)
 		distance := 0.0
 		for i, x := range query {
-			delta := float64(x) - float64(v[i])
-			distance += delta * delta
+			if cs.Index == "ivf128" {
+				delta := float64(x) - float64(v[i])
+				distance += delta * delta
+			} else {
+				// Negate inner product so every workflow sorts best scores first.
+				distance -= float64(x) * float64(v[i])
+			}
 		}
 		neighbors = append(neighbors, neighbor{row.ID, distance})
 	}
 	if len(neighbors) == 0 {
-		return 0, fmt.Errorf("%s has no eligible rows", cs.Name)
+		return nil, fmt.Errorf("%s has no eligible rows", cs.Name)
 	}
-	sort.Slice(neighbors, func(i, j int) bool { return neighbors[i].distance < neighbors[j].distance })
+	sort.Slice(neighbors, func(i, j int) bool {
+		if neighbors[i].distance == neighbors[j].distance {
+			return neighbors[i].id < neighbors[j].id
+		}
+		return neighbors[i].distance < neighbors[j].distance
+	})
 	k := min(d.Config.TopK, len(neighbors))
 	expected := make(map[int64]bool, k)
 	for _, n := range neighbors[:k] {
 		expected[n.id] = true
+	}
+	return expected, nil
+}
+
+func exactRecall(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Case) (float64, error) {
+	expected, err := exactTopK(d, cs)
+	if err != nil {
+		return 0, err
 	}
 	sets, err := search(ctx, cli, d, cs, 0)
 	if err != nil {
@@ -306,7 +324,7 @@ func exactRecall(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Ca
 			hits++
 		}
 	}
-	return float64(hits) / float64(k), nil
+	return float64(hits) / float64(len(expected)), nil
 }
 
 func searchResultError(sets []milvusclient.ResultSet) error {
