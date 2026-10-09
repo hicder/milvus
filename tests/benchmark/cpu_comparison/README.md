@@ -110,7 +110,7 @@ This gives developers the repository's compiler and dependency environment while
 Install Git, [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), and the [Compose plugin](https://docs.docker.com/compose/install/linux/). Your user must be able to run `docker` commands. The upstream source-build guidance asks for at least 8 GiB RAM and 50 GiB free disk; leave additional space for build caches and benchmark data. Builds download dependencies from public registries and package repositories.
 
 ```sh
-git clone --branch nathanwilk7/cpu-benchmarks https://github.com/hicder/milvus.git
+git clone --branch nathanwilk7/cpu-benchmarks https://github.com/nathanwilk7/milvus.git
 cd milvus
 
 # AMD/x86-64 host: uname -m should report x86_64.
