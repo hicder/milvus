@@ -88,11 +88,13 @@ These are **untested sizing guesses**, not capacity claims. For example, [m7a.4x
 
 Use `queries=1000`, `warmup_seconds=30`, `-duration 120`, and start `-concurrency 64`. Sweep `-qps 100`, `500`, `1000`, then higher as appropriate, comparing the default 95% and 1% HNSW cases. Repeat each point three times; watch server CPU, memory, p95, failures, and drops. Check load-generator CPU and concurrency headroom before interpreting dropped requests as server saturation. These are suggestions, not changed defaults; edit the config and `reset` when changing rows/query-pool/warmup.
 
-HNSW512 raw vectors alone use about **2 GB per million rows**; indexes, build-time working memory, Milvus overhead, and the generator's in-memory dataset require additional headroom. Avoid swapping, especially if generator and server share a host. Start smaller if setup is memory-constrained; the default 100k rows remains a smoke test.
+HNSW512 raw vectors alone use about **2 GB per million rows**; indexes, build-time working memory, Milvus overhead, and the generator's in-memory dataset require additional headroom. Avoid swapping, especially if generator and server share a host. Start smaller if setup is memory-constrained; the checked-in 200k-row config is a starting point for a smoke test.
 
 ## Start Milvus
 
-A couple options to start Milvus:
+Choose one launch route at a time; each uses port 19530. Use the published image for an initial smoke test, or a source build to modify Milvus itself.
+
+The official open-source instructions for this version are the [Milvus v2.6.24 development guide](https://github.com/milvus-io/milvus/blob/v2.6.24/DEVELOPMENT.md#building-milvus-on-a-local-osshell-environment) and [Docker builder guide](https://github.com/milvus-io/milvus/blob/v2.6.24/build/README.md). Local copies are [DEVELOPMENT.md](../../../DEVELOPMENT.md) and [build/README.md](../../../build/README.md). The recipes below adapt those guides to this benchmark checkout; use this checkout's `go.mod`, `.env`, and builder Dockerfile for toolchain versions rather than the older minimum versions listed in the guides.
 
 ### Docker standalone image
 
@@ -101,27 +103,185 @@ A couple options to start Milvus:
 go run ./tests/benchmark/cpu_comparison up
 ```
 
+### Linux source build in the development builder (recommended)
+
+This gives developers the repository's compiler and dependency environment while allowing edits in the host checkout. The current builder uses Ubuntu 22.04, GCC 12, CMake 3.31.8, Conan 1.64.1, Go 1.25.13, and Rust 1.89. The Linux host can use Ubuntu 24.04; compilation and the Milvus process run inside the builder. CPU instructions execute on the host CPU when the container architecture matches the host.
+
+Install Git, [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), and the [Compose plugin](https://docs.docker.com/compose/install/linux/). Your user must be able to run `docker` commands. The upstream source-build guidance asks for at least 8 GiB RAM and 50 GiB free disk; leave additional space for build caches and benchmark data. Builds download dependencies from public registries and package repositories.
+
+```sh
+git clone --branch nathanwilk7/cpu-benchmarks https://github.com/hicder/milvus.git
+cd milvus
+
+# AMD/x86-64 host: uname -m should report x86_64.
+# On Graviton/aarch64 use IMAGE_ARCH=arm64 instead; avoid CPU emulation.
+export IMAGE_ARCH=amd64
+export OS_NAME=ubuntu22.04
+
+# Build the toolchain image from this checkout's Dockerfile.
+docker compose -f docker-compose.yml -f tests/benchmark/cpu_comparison/builder-compose.yml build builder
+
+# Enter the source-mounted builder; Compose starts its development dependencies.
+docker compose -f docker-compose.yml -f tests/benchmark/cpu_comparison/builder-compose.yml run --service-ports --name cpu-bench-builder builder bash
+```
+
+Inside the builder shell, build both the C++ libraries and Go server, then launch your newly built binary in the foreground:
+
+```sh
+go version
+gcc --version
+cmake --version
+conan --version
+rustc --version
+
+make milvus MILVUS_VERSION=2.6.24
+bash -c 'source scripts/setenv.sh; exec ./bin/milvus run standalone'
+```
+
+`MILVUS_VERSION=2.6.24` is required for this **2.6.24-based benchmark branch**: the Makefile otherwise labels a branch build with a development version, which the benchmark's exact-version check rejects. This setting controls the reported version; it does not prove source equivalence to the release. Preserve the source commit, local diff, build options, and binary checksum for each experiment. Do not apply this override to a different Milvus release.
+
+In a second terminal on the Linux host, from the same repository root, install [Go](https://go.dev/doc/install) matching the host architecture (at least 1.25.8, as required by `go.mod`), then verify readiness and exercise the build:
+
+```sh
+curl --fail http://127.0.0.1:9091/healthz
+go build -o /tmp/cpu-bench ./tests/benchmark/cpu_comparison
+/tmp/cpu-bench metadata -output /tmp/source-server.json -container cpu-bench-builder -notes 'source build; record commit, patch, binary checksum and build options'
+/tmp/cpu-bench setup -workflow hnsw
+/tmp/cpu-bench run -workflow hnsw -case hnsw512_not_deleted -duration 20 -qps 10 -concurrency 4 -server-metadata /tmp/source-server.json
+```
+
+If health is not ready yet, retry the health check before setup. The builder image is the toolchain image, while `bin/milvus` and its libraries come from the mounted checkout; its image digest alone does not identify the running server binary.
+
+To modify Milvus, edit the host checkout, press Ctrl-C in the builder terminal to stop the server, and rerun the build and launch commands there. Keep the same builder and dependency containers during this loop so the existing collection remains available. Use `run` again for code-only changes; use `reset` when changing dataset/schema/index settings. Recapture metadata to a new filename after each build and attach it to subsequent runs. `make milvus` also regenerates protobuf output, so inspect `git diff` when recording your patch.
+
+For incremental builds, `make milvus MILVUS_VERSION=2.6.24 SKIP_3RDPARTY=1` skips third-party dependency installation/build after a successful full build. Omit that flag when changing dependency definitions or switching build settings. The default C++ mode is `Release`; use `mode=RelWithDebInfo` for profiling with symbols and record that choice on both machines.
+
+On Graviton, also confirm ARM64 support for the dependency images in the root Compose file; changing `IMAGE_ARCH` selects the builder architecture only.
+
 ### Native Linux source build
 
-Follow the repository's [native build prerequisites](../../../DEVELOPMENT.md#building-milvus-on-a-local-osshell-environment) first. Choose only one launch route at a time, since each publishes port 19530.
+For a host-native build, first follow the [official dependency setup](https://github.com/milvus-io/milvus/blob/v2.6.24/DEVELOPMENT.md#installing-dependencies). This checkout requires Go >= 1.25.8 and Conan **1.x**, and the builder above provides a concrete reference toolchain. The upstream `scripts/install_deps.sh` installs system packages, Conan, CMake, and Rust, but does not install Go or select GCC 12 automatically. It targets older Ubuntu releases and uses `sudo pip3`; on Ubuntu 24.04 prefer the builder route, or provision the equivalent toolchain with Conan in an isolated Python environment. The upstream FAQ recommends Python <= 3.11 for older Conan dependencies.
 
-For a native Linux source build, start the benchmark dependencies, then build and run Milvus:
+After installing and verifying those tools, run from the repository root:
 
 ```sh
+# Start only etcd and MinIO; do not start the published standalone image.
 docker compose -f tests/benchmark/cpu_comparison/docker-compose.yml up -d etcd minio
-make milvus
-ETCD_ENDPOINTS=127.0.0.1:2379 MINIO_ADDRESS=127.0.0.1:9000 LD_LIBRARY_PATH="./internal/core/output/lib:./lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./bin/milvus run standalone
+make milvus MILVUS_VERSION=2.6.24
+
+# The default local-storage paths are under /var/lib/milvus.
+# On a dedicated benchmark host, create them for the current user once.
+sudo install -d -o "$(id -u)" -g "$(id -g)" /var/lib/milvus
+
+ETCD_ENDPOINTS=127.0.0.1:2379 MINIO_ADDRESS=127.0.0.1:9000 \
+  bash -c 'source scripts/setenv.sh; exec ./bin/milvus run standalone'
 ```
 
-### Development builder container
+Use the second-terminal readiness/setup/run commands above, omitting `-container` from metadata and recording binary provenance and process resource limits in `-notes`. If Conan 1.x is installed as `conan-1`, prefix the build with `CONAN_CMD=conan-1`. Rebuild and restart after edits, as with the builder route. Binaries built in the builder may require its libraries/glibc environment; use the native route when you need a host-native executable.
 
-For the repository's development builder container, build and run Milvus inside the Linux builder. The root Compose file supplies its dependencies; the small override publishes the Milvus ports:
+### Modify Knowhere and other dependencies
+
+`make milvus` builds Knowhere and the other CMake source dependencies together with Milvus; you do not need to build/install Knowhere separately. In this checkout, the [Knowhere integration](../../../internal/core/thirdparty/knowhere/CMakeLists.txt) fetches `https://github.com/zilliztech/knowhere.git` at **v2.6.21**. This is the Knowhere version used by this Milvus 2.6.24 checkout; the two projects have independent version numbers.
+
+For local Knowhere edits, use a separate checkout and CMake's [source-directory override](https://cmake.org/cmake/help/v3.31/module/FetchContent.html#variable:FETCHCONTENT_SOURCE_DIR_%3CuppercaseName%3E). Run these commands from the Milvus repository root, either inside the builder shell or in the prepared native build environment:
 
 ```sh
-docker compose -f docker-compose.yml -f tests/benchmark/cpu_comparison/builder-compose.yml run --service-ports builder bash -lc 'make milvus && LD_LIBRARY_PATH="./internal/core/output/lib:./lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./bin/milvus run standalone'
+# Kept inside the source mount, but outside make clean's build directories.
+mkdir -p .docker/dependency-src
+git clone --branch v2.6.21 https://github.com/zilliztech/knowhere.git .docker/dependency-src/knowhere
+git -C .docker/dependency-src/knowhere switch -c amd-experiment
+
+# Edit .docker/dependency-src/knowhere, then rebuild the full server.
+# Set this in the shell that runs make; the path must exist inside the builder.
+export CMAKE_EXTRA_ARGS="-DFETCHCONTENT_SOURCE_DIR_KNOWHERE=${PWD}/.docker/dependency-src/knowhere"
+make milvus MILVUS_VERSION=2.6.24
 ```
 
-See the [builder guide](../../../build/README.md). The root `.env` defaults to `IMAGE_ARCH=amd64`; choose the architecture of the Linux host. `up`/`down` manage only the benchmark Docker standalone stack. Stop a foreground source/builder process with Ctrl-C. For native source dependencies, use `down` afterward. To stop the builder's separate Compose stack, use `docker compose -f docker-compose.yml -f tests/benchmark/cpu_comparison/builder-compose.yml down --remove-orphans`.
+The override bypasses CMake's download/update of Knowhere and builds your local checkout. Keep it set for each rebuild. Stop the old Milvus process first, then restart with the launch command for your chosen route. After a successful full build, source-only Knowhere edits can use `make milvus MILVUS_VERSION=2.6.24 SKIP_3RDPARTY=1`: that skips the Conan installation phase, **not** Knowhere compilation. Leave it off if dependency requirements or build settings change.
+
+For HNSW work, Knowhere's wrapper is `src/index/hnsw/faiss_hnsw.cc` and its vendored Faiss implementation is under `thirdparty/faiss/`, both inside the separate checkout. Edits there are compiled through the same Milvus build; installing a Python Faiss package does not change the C++ library Milvus uses. For Knowhere unit tests and standalone development, follow its [v2.6.21 README](https://github.com/zilliztech/knowhere/blob/v2.6.21/README.md) (Conan 1.x, `with_ut=True`, then the `knowhere_tests` executable); the ordinary Milvus build does not enable Knowhere's tests by default. Keep a standalone Knowhere test build separate from Milvus's `cmake_build` tree.
+
+Confirm the source selected by CMake and record the local dependency's identity:
+
+```sh
+rg '^FETCHCONTENT_SOURCE_DIR_KNOWHERE:' cmake_build/CMakeCache.txt
+git -C .docker/dependency-src/knowhere rev-parse HEAD
+git -C .docker/dependency-src/knowhere diff --binary > /tmp/knowhere-experiment.patch
+sha256sum bin/milvus internal/core/output/lib/libknowhere.so
+```
+
+Also preserve new/untracked files or commit them locally in the Knowhere checkout. `.docker/` is ignored by the Milvus repository, so Milvus's `git diff` and metadata snapshot do not include your Knowhere patch. Record the dependency commit/patch and built library checksum alongside the run results. If the shared library has a different installed filename, locate it under `internal/core/output/lib` and checksum that file.
+
+To return to the automatically fetched baseline, **clear the cached override explicitly**, then rebuild and restart:
+
+```sh
+export CMAKE_EXTRA_ARGS='-DFETCHCONTENT_SOURCE_DIR_KNOWHERE='
+make milvus MILVUS_VERSION=2.6.24
+unset CMAKE_EXTRA_ARGS
+```
+
+Unsetting the environment variable alone does not remove an override already saved in `CMakeCache.txt`. For a fully clean rebuild, stop Milvus, save your patches/results, run `make clean`, and rerun the full build with the intended override/settings. `make clean` deletes `bin/`, `lib/`, `cmake_build/`, and `internal/core/output/`; it keeps the separate `.docker/dependency-src/knowhere` checkout. Avoid editing the default fetched source under `cmake_build/`, where cleanup or dependency updates can remove your changes.
+
+Other dependency entry points:
+
+| Dependency | Where to edit or pin it | Rebuild guidance |
+| --- | --- | --- |
+| milvus-common (`54cb8fe`) | [CMake integration](../../../internal/core/thirdparty/milvus-common/CMakeLists.txt) | Same FetchContent approach; the override is `FETCHCONTENT_SOURCE_DIR_MILVUS-COMMON`. |
+| milvus-storage (`1f14008`) | [CMake integration](../../../internal/core/thirdparty/milvus-storage/CMakeLists.txt) | Use `FETCHCONTENT_SOURCE_DIR_MILVUS-STORAGE` pointing at the repository root; the integration selects its `cpp` subdirectory. |
+| Arrow, RocksDB, OpenBLAS, protobuf, and other Conan packages | [Conan requirements/options](../../../internal/core/conanfile.py) and [installation script](../../../scripts/3rdparty_build.sh) | Update the package/recipe revision and build without `SKIP_3RDPARTY`. Locally patched packages need their own Conan 1.x recipe/reference; `--build=missing` can reuse an existing cached binary and does not force a patched rebuild. |
+| Tantivy/Rust bindings | [Binding sources and Cargo manifest/lock](../../../internal/core/thirdparty/tantivy/tantivy-binding) and [CMake integration](../../../internal/core/thirdparty/tantivy/CMakeLists.txt) | Edit the binding sources directly; preserve Cargo revision/lock changes. `make milvus` invokes Cargo with Rust 1.89. |
+| Go libraries | Root `go.mod`/`go.sum`, plus the `pkg` and `client` module files when relevant | Update the appropriate module and rebuild Milvus; rebuild the benchmark CLI too if its dependencies changed. |
+
+Preserve the same build mode and dependency baseline between AMD/Graviton runs. Changing a dependency pin may require corresponding Milvus API changes and dependency tests. These are source/build instructions, not a claim that a modified dependency has passed its own tests or the Linux benchmark.
+
+### Distance kernels, SIMD, and build options
+
+Record both **what was compiled** and **what the running server selected**. These settings can affect distance-calculation speed and numerical results, and should be part of each AMD/Graviton experiment's metadata. Start with the defaults on each architecture, then change one setting at a time.
+
+| Setting | This checkout's behavior | How to experiment |
+| --- | --- | --- |
+| C++ build mode | `mode=Release` by default | Use `mode=RelWithDebInfo` for profiling with symbols; keep the mode consistent across a comparison. |
+| x86 distance kernels | Knowhere v2.6.21 builds SSE4.2, AVX2, and AVX-512 variants, with per-target compiler flags | Use the runtime SIMD setting below for initial kernel comparisons. For compiler/kernel changes, edit the local Knowhere checkout's `cmake/libs/libfaiss.cmake` and `src/simd/`, then rebuild Milvus. |
+| ARM distance kernels | The same Knowhere build includes NEON and compiler-dependent SVE support; runtime hooks check CPU capabilities | Use `auto` on Graviton. Preserve compiler checks/flags and runtime selection logs; compiler support alone does not prove the CPU supports an instruction set. Some operations still use NEON when the selected path reports SVE. |
+| `USE_DYNAMIC_SIMD` | Milvus's Makefile defaults to `ON` and forwards a CMake macro | Record this flag. `OFF` does **not** establish a scalar-only build: Knowhere's distance-kernel targets and hooks are defined separately. Verify the generated compile flags and actual kernel selection before attributing a performance difference to this switch. |
+| `CPU_TARGET` / `CPU_ARCH` | `scripts/core_build.sh` detects broad targets such as `avx`, `sse`, or `aarch64`, then passes `CPU_ARCH` to CMake | These values are not an AVX2-versus-AVX-512 runtime selector. Inspect the actual dependency target flags when tuning a build; avoid adding a global `-march=native` without checking all targets and the CPUs where the binary will run. |
+| BLAS | The Linux Faiss integration selects OpenBLAS; the Conan recipe enables `openblas:dynamic_arch` | Library version, build options, and threading may matter for BLAS-backed paths. Changing the package requires the Conan dependency workflow above. This runner sends one query vector per request, so its results do not establish batched BLAS performance. |
+| Score computation | `queryNode.segcore.knowhereScoreConsistency` defaults to `false`; enabling it invokes Knowhere's FP32-as-BF16 score-computation patch | Treat this as a numerical-behavior experiment, preserve the setting, and validate scores/recall as well as latency. The benchmark's single-query recall check is insufficient to establish accuracy equivalence. |
+
+The primary runtime control is [common.simdType](../../../configs/milvus.yaml), accepted by [Milvus's Knowhere adapter](../../../internal/core/src/config/ConfigKnowhere.cpp). To compare AVX2 with the default on an AMD host, merge this into `configs/user.yaml` without replacing existing settings, then restart Milvus:
+
+```yaml
+common:
+  simdType: avx2
+```
+
+Valid values in this version are `auto`, `avx512`, `avx2`, `avx`, and `sse4_2`. `avx` is an alias for `sse4_2` in this adapter. On x86, `auto` and `avx512` both allow AVX-512 with fallback to supported lower instruction sets; `avx2` excludes AVX-512 from the configured distance hooks. `generic`, `neon`, and `sve` are **not** accepted Milvus configuration values in this version, even though Knowhere has implementations with those names. On ARM, the x86 selection flags do not control the NEON/SVE hook; keep the setting at `auto`.
+
+Changing this startup configuration does not require a rebuild. Inspect startup logs for `FAISS hook` and the reported SIMD selection, and retain them with the run. A hook label describes dispatch for the configured functions, not a guarantee that every operation in every index uses that ISA; specialized kernels and BLAS have their own paths. Inspect this pinned Knowhere source's `src/simd/hook.cc` and `cmake/libs/libfaiss.cmake` when narrowing the scope of an experiment.
+
+For an explicit build baseline and metadata record:
+
+```sh
+make milvus MILVUS_VERSION=2.6.24 mode=Release USE_DYNAMIC_SIMD=ON
+# Run on the Linux host; use a fresh output filename for each experiment.
+/tmp/cpu-bench metadata -output /tmp/source-simd-baseline.json -container cpu-bench-builder \
+  -build-flags 'MILVUS_VERSION=2.6.24 mode=Release USE_DYNAMIC_SIMD=ON' \
+  -notes 'Record Knowhere commit/patch, compiler flags, BLAS settings and actual SIMD selection'
+```
+
+Include any `CMAKE_EXTRA_ARGS` source overrides and custom compiler settings in the recorded build flags. For native Milvus, omit `-container`. If attaching `-server-config`, supply sanitized configuration including the SIMD and score settings; this tool copies the file verbatim and does not collect effective configuration automatically. The baseline command and metadata example do not replace validating the compiled binary on the target CPU.
+
+### Stop a source build
+
+Press Ctrl-C to stop the foreground Milvus process. For the native route, `go run ./tests/benchmark/cpu_comparison down` stops its benchmark dependencies. For the builder route, exit the shell and stop its separate development stack:
+
+```sh
+docker compose -f docker-compose.yml -f tests/benchmark/cpu_comparison/builder-compose.yml down --remove-orphans
+```
+
+The root development stack does not persist etcd/MinIO data in named volumes, so this builder cleanup discards that stack's collection state; rerun setup after starting it again. Local dataset bundles/results remain in the checkout. The benchmark `up`/`down` commands manage only the small standalone stack, not the builder stack.
+
+These source-build recipes were checked against this checkout's build files; a full Linux source build and benchmark run still need to be verified on the target AMD/Graviton machines.
 
 ## TODO
 
