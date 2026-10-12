@@ -1,6 +1,6 @@
 # Selected Milvus CPU repro cases
 
-Run these three synthetic cases to investigate filtered vector-search CPU performance. Both workflows contain one million seeded random vectors and replay 1000 query vectors. The posts cases use 512D HNSW/IP; ads uses 100D IVF_FLAT/L2. Milvus 2.6.24 is required. These are production-inspired execution cases, with synthetic selectivity and embeddings.
+Run these three synthetic cases to investigate filtered vector-search CPU performance. Both workflows contain one million seeded random vectors and replay 1000 query vectors. The posts cases use 512D HNSW/IP; ads uses 100D IVF_FLAT/L2. Milvus 2.6.24 is required. The data, selectivity and embeddings are synthetic.
 
 | Case | Offered QPS | Concurrency | Purpose |
 | --- | ---: | ---: | --- |
@@ -19,13 +19,13 @@ CGO_ENABLED=0 go build -o cpu-bench ./tests/benchmark/cpu_comparison
 export GOMEMLIMIT=24GiB
 ```
 
-Use the Go version required by `go.mod` or newer. The binary above is the load generator, not a Milvus source build. Run it on a separate Linux host from the server when possible. Give the generator at least the tested 32 GiB memory budget: its initial one-million-row HNSW setup OOM-killed an 8 GiB container because generation/serialization needs extra memory beyond raw vector storage. `GOMEMLIMIT` is a soft Go limit, not a container memory limit. Record generator CPU usage when interpreting drops at high QPS.
+Use the Go version required by `go.mod` or newer. The binary above is the load generator, not a Milvus source build. Run it on a separate Linux host from the server when possible. Allow 32 GiB of memory for the generator: one-million-row generation and serialization need extra memory beyond raw vector storage. `GOMEMLIMIT` is a soft Go limit, not a container memory limit. Record generator CPU usage when interpreting drops at high QPS.
 
 For Milvus/Knowhere source builds and changes, follow the [Linux build instructions](README.md#linux-source-build-in-the-development-builder-recommended). Preserve source/build settings and use native x86-64 execution on AMD rather than ARM emulation.
 
 ## Start the posts server
 
-Run this on the Milvus server host, from a checkout of this branch. Docker Engine and Docker Compose are required. The repro stack uses embedded etcd, local storage and RocksMQ, matching the launch route used in our initial exercise. All server data is in its own Docker volume.
+Run this on the Milvus server host, from a checkout of this branch. Docker Engine and Docker Compose are required. The repro stack uses embedded etcd, local storage and RocksMQ. All server data is in its own Docker volume.
 
 ```sh
 docker compose -p cpu-repro \
@@ -34,7 +34,7 @@ docker compose -p cpu-repro \
   up -d --wait
 ```
 
-The posts server has **32 GiB memory, GOMAXPROCS=30, and no CPU quota**. Unlike a Kubernetes CPU request, this Docker profile does not reserve 30 CPUs. The ads profile below uses **15 GiB, GOMAXPROCS=22 and a 22-CPU quota**; the tested preprod ads pod instead had an allowed set of 22 CPUs without a quota. These are resource-budget starting points, not identical CPU placement.
+The posts server has **32 GiB memory, GOMAXPROCS=30, and no CPU quota**. Unlike a Kubernetes CPU request, this Docker profile does not reserve 30 CPUs. The ads profile below uses **15 GiB, GOMAXPROCS=22 and a 22-CPU quota**. These are example resource budgets; CPU placement depends on the host.
 
 Both profiles configure automatic SIMD selection, read-concurrency ratio 1, Knowhere pool ratio 4, cgo pool ratio 2, and the selected mmap/filter settings. Record actual CPU model, physical/logical cores, SMT, NUMA, container limits, and selected SIMD kernels with any findings.
 
@@ -56,7 +56,7 @@ From the load-generator checkout, replace `SERVER_HOST:19530` with the benchmark
 
 `setup` waits for insert, flush, index creation and load before validating the filters. First-time HNSW setup can take tens of minutes. If the server has an incomplete or older benchmark collection, use `reset` with the same workflow/config/address/data flags; that rebuilds only the corresponding benchmark collection. Editing a config after setup does not change the saved dataset or search settings used by `run`.
 
-Start at 1000 QPS if checking basic functionality first. If tuning, change QPS at a fixed concurrency and retain failures/drops alongside latency. The 3000-QPS recent/deletion point intentionally exercises high latency and had some drops in our initial exercise.
+Start at 1000 QPS if checking basic functionality first. If tuning, change QPS at a fixed concurrency and retain failures/drops alongside latency. The listed QPS values are starting points; adjust them to exercise the desired latency range on your machine.
 
 ## Switch to the ads server and run IVF
 
@@ -86,17 +86,17 @@ Then, on the generator:
 
 Ads uses nlist=256, nprobe=8, top-k=1000, 64 flight IDs, eventual consistency and `ignore_growing=true`. It returns row and flight IDs. Old 128D IVF collections/bundles need rebuilding with `reset`; do not reuse their results as this profile's baseline.
 
-If 6000 QPS overloads the tested machine, start at 1000 and increase. Our initial ads sweep achieved about 6000 QPS at p99 7 ms with no failures/drops, while 7000 offered QPS reached p99 around 50 ms and dropped arrivals. The chosen exploratory target is p99 below 20 ms with no failures/drops, not a production capacity guarantee.
+If 6000 QPS overloads the machine, start at 1000 and increase. For example, tune toward the highest achieved QPS with p99 below 20 ms and no failures or drops.
 
 ## Accuracy and synthetic workload limits
 
-The 1% flight survival setting is uncalibrated to production. The requests all use the same list; the benchmark omits real product/flight skew, changing request eligibility, PAS partition layout and real embeddings. Standalone also shares resources among all Milvus roles; these budgets do not isolate QueryNode alone.
+The 1% flight survival setting is synthetic. The requests all use the same list; the benchmark omits real data skew, changing request eligibility, partition layouts and real embeddings. Standalone also shares resources among all Milvus roles; these budgets do not isolate QueryNode alone.
 
-The single-query recall check was **0.084 for the selected ads run**, **0.2 for the recent/deletion stress run**, and **1.0 for subreddit** in the initial exercise. It is a sanity check, not a recall distribution. In particular, ads may return fewer than 1000 eligible neighbors from eight probed lists. Preserve recall/search settings in results and investigate accuracy separately before making capacity claims. These settings are useful to reproduce execution hotspots; they do not establish production-quality recall.
+The single-query recall check is a sanity check, not a recall distribution. In particular, ads may return fewer than 1000 eligible neighbors from eight probed lists. Preserve recall/search settings in results and investigate accuracy separately before making capacity claims. These settings are useful to reproduce execution hotspots; they do not establish application-quality recall.
 
 ## Profile and send findings
 
-The console reports achieved QPS, successful-request p50/p95/p99/p99.9, sample recall, failures and dropped arrivals. JSON results are saved under `./cpu-repro-data/WORKFLOW/runs/`. Send those summaries along with machine/container/build settings and any profiling observations; an exact Graviton/AMD comparison is not required for this initial investigation.
+The console reports achieved QPS, successful-request p50/p95/p99/p99.9, sample recall, failures and dropped arrivals. JSON results are saved under `./cpu-repro-data/WORKFLOW/runs/`. Send those summaries along with machine/container/build settings and any profiling observations.
 
 For a flamegraph, run the selected case for 60 measured seconds, find the **host PID of `milvus run standalone`** (not tini), and start this helper when the generator prints `measuring`:
 

@@ -2,7 +2,7 @@ common:
   simdType: auto
   storageType: local
 etcd:
-  rootPath: amd-graviton-posts
+  rootPath: cpu-repro-hnsw
 mq:
   type: rocksmq
 rocksmq:
