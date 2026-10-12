@@ -191,6 +191,9 @@ func setupWorkflow(configPath, dir, workflow, address string, replace bool) erro
 		return err
 	}
 	c.Workflow = workflow
+	if err := c.validate(); err != nil {
+		return err
+	}
 	if address != "" {
 		c.Address = address
 	}

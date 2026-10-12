@@ -1,0 +1,7 @@
+services:
+  standalone:
+    mem_limit: 32g
+    environment:
+      GOMAXPROCS: "30"
+    volumes:
+      - ./repro-posts.yaml:/milvus/configs/user.yaml:ro

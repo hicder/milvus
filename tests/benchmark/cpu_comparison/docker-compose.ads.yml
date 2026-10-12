@@ -1,0 +1,8 @@
+services:
+  standalone:
+    cpus: 22.0
+    mem_limit: 15g
+    environment:
+      GOMAXPROCS: "22"
+    volumes:
+      - ./repro-ads.yaml:/milvus/configs/user.yaml:ro
