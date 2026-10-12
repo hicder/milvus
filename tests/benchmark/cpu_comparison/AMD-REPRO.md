@@ -13,7 +13,7 @@ Each run warms up for 30 seconds and measures for 30 seconds. Setup, index build
 ## Get and build the load generator
 
 ```sh
-git clone --branch nathanwilk7/cpu-benchmarks --single-branch https://github.com/hicder/milvus.git
+git clone --branch amd-benchmarks --single-branch https://github.com/hicder/milvus.git
 cd milvus
 CGO_ENABLED=0 go build -o cpu-bench ./tests/benchmark/cpu_comparison
 export GOMEMLIMIT=24GiB
