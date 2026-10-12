@@ -76,8 +76,11 @@ func (c Config) validate() error {
 	if c.QPS > 1000000 || c.DurationSeconds > 86400 || c.WarmupSeconds > 86400 || c.TimeoutSeconds > 86400 {
 		return fmt.Errorf("qps must be <= 1000000 and durations must be <= 86400 seconds")
 	}
-	if c.TopK > c.Rows || c.Ef < c.TopK || 384%c.PRQM != 0 {
-		return fmt.Errorf("top_k must be <= rows, ef must be >= top_k, and prq_m must divide 384")
+	if c.TopK > c.Rows || 384%c.PRQM != 0 {
+		return fmt.Errorf("top_k must be <= rows and prq_m must divide 384")
+	}
+	if (c.Workflow == "hnsw" || c.Workflow == "prq") && c.Ef < c.TopK {
+		return fmt.Errorf("ef must be >= top_k for HNSW workflows")
 	}
 	return nil
 }
@@ -108,7 +111,7 @@ func workflowIndex(workflow string) (string, error) {
 	case "prq":
 		return "prq384", nil
 	case "ivf":
-		return "ivf128", nil
+		return "ivf100", nil
 	default:
 		return "", fmt.Errorf("unknown workflow %q (choose hnsw, prq, or ivf)", workflow)
 	}
@@ -131,7 +134,7 @@ func cases(c Config) []Case {
 			ids[i] = fmt.Sprint(id)
 		}
 		f := fmt.Sprintf("flight_id in [%s]", strings.Join(ids, ","))
-		out = append(out, Case{"ivf_flights", "ivf128", f}, Case{"ivf_flights_not_deleted", "ivf128", f + " and is_deleted == false"})
+		out = append(out, Case{"ivf_flights", "ivf100", f}, Case{"ivf_flights_not_deleted", "ivf100", f + " and is_deleted == false"})
 	}
 	return out
 }

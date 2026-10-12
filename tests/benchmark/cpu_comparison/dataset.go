@@ -20,12 +20,12 @@ type Row struct {
 	Created          int64
 	Subreddit        int64
 	Flight           int64
-	V512, V384, V128 []float32
+	V512, V384, V100 []float32
 }
 type Dataset struct {
 	Config           Config
 	Rows             []Row
-	Q512, Q384, Q128 [][]float32
+	Q512, Q384, Q100 [][]float32
 }
 type Manifest struct {
 	Config     Config         `json:"config"`
@@ -60,8 +60,8 @@ func generate(c Config) Dataset {
 			d.Rows[i].V512 = randomVector(r, 512)
 		case "prq384":
 			d.Rows[i].V384 = randomVector(r, 384)
-		case "ivf128":
-			d.Rows[i].V128 = randomVector(r, 128)
+		case "ivf100":
+			d.Rows[i].V100 = randomVector(r, 100)
 		}
 		if i < selectedSub {
 			d.Rows[i].Subreddit = 1
@@ -81,8 +81,8 @@ func generate(c Config) Dataset {
 			d.Q512 = append(d.Q512, randomVector(r, 512))
 		case "prq384":
 			d.Q384 = append(d.Q384, randomVector(r, 384))
-		case "ivf128":
-			d.Q128 = append(d.Q128, randomVector(r, 128))
+		case "ivf100":
+			d.Q100 = append(d.Q100, randomVector(r, 100))
 		}
 	}
 	return d
@@ -197,8 +197,8 @@ func loadDataset(dir string) (Dataset, Manifest, error) {
 		queries = len(d.Q512)
 	case "prq384":
 		queries = len(d.Q384)
-	case "ivf128":
-		queries = len(d.Q128)
+	case "ivf100":
+		queries = len(d.Q100)
 	}
 	if len(d.Rows) != m.Config.Rows || queries != m.Config.Queries || d.Config.Workflow != m.Config.Workflow {
 		return d, m, fmt.Errorf("dataset shape mismatch")
@@ -224,6 +224,6 @@ func rowVector(row Row, idx string) []float32 {
 	case "prq384":
 		return row.V384
 	default:
-		return row.V128
+		return row.V100
 	}
 }

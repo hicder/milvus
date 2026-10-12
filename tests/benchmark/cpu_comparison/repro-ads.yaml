@@ -1,0 +1,40 @@
+common:
+  simdType: auto
+  storageType: local
+etcd:
+  rootPath: cpu-repro-ivf
+mq:
+  type: rocksmq
+rocksmq:
+  path: /var/lib/milvus/rdb_data
+localStorage:
+  path: /var/lib/milvus/data
+queryNode:
+  grouping:
+    maxNQ: 1
+  scheduler:
+    maxReadConcurrentRatio: 1
+    cpuRatio: 10
+    unsolvedQueueSize: 1024
+  segcore:
+    knowhereThreadPoolNumRatio: 4
+    cgoPoolSizeRatio: 2
+    chunkRows: 128
+    knowhereScoreConsistency: false
+  mmap:
+    vectorField: true
+    vectorIndex: false
+    scalarField: false
+    scalarIndex: false
+    growingMmapEnabled: false
+  lazyload:
+    enabled: false
+  exprCache:
+    enabled: false
+  indexOffsetCacheEnabled: false
+  enableSegmentFilter: true
+  enableSegmentPrune: false
+dataCoord:
+  segment:
+    maxSize: 256
+    sealProportion: 0.4
