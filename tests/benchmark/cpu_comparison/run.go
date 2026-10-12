@@ -180,7 +180,7 @@ func runAll(ctx context.Context, cli *milvusclient.Client, d Dataset, m Manifest
 		if err = os.WriteFile(dir+"/"+cs.Name+".json", b, 0644); err != nil {
 			return err
 		}
-		fmt.Printf("%s: %.1f QPS, p50 %.1f ms, p95 %.1f ms, p99 %.1f ms, p99.9 %s ms, failed %d, dropped %d\n", cs.Name, res.AchievedQPS, res.P50MS, res.P95MS, res.P99MS, formatP999(res.P999MS), res.Failed, res.Dropped)
+		fmt.Printf("%s: %.1f QPS, p50 %.1f ms, p95 %.1f ms, p99 %.1f ms, p99.9 %s ms, sample recall %.3f, failed %d, dropped %d\n", cs.Name, res.AchievedQPS, res.P50MS, res.P95MS, res.P99MS, formatP999(res.P999MS), res.RecallAtK, res.Failed, res.Dropped)
 		if err := ctx.Err(); err != nil {
 			return err
 		}

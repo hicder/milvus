@@ -1,7 +1,7 @@
 {
   "address": "127.0.0.1:19530",
   "collection_prefix": "cpu_bench",
-  "rows": 200000,
+  "rows": 1000000,
   "batch_rows": 1000,
   "seed": 42,
   "anchor_unix": 1767225600,
@@ -80,14 +80,14 @@
   "prq_nrq": 2,
   "prq_m": 32,
   "prq_nbits": 8,
-  "queries": 100,
+  "queries": 1000,
   "nprobe": 8,
   "ef": 128,
   "top_k": 1000,
-  "qps": 1000,
-  "concurrency": 32,
-  "warmup_seconds": 10,
-  "duration_seconds": 60,
+  "qps": 6000,
+  "concurrency": 256,
+  "warmup_seconds": 30,
+  "duration_seconds": 30,
   "timeout_seconds": 10,
   "workflow": "ivf"
 }
