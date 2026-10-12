@@ -41,7 +41,7 @@ func dimension(idx string) int {
 	case "prq384":
 		return 384
 	default:
-		return 128
+		return 100
 	}
 }
 func vectorIndex(c Config, idx string) index.Index {
@@ -164,18 +164,25 @@ func queryVector(d Dataset, idx string, n int) []float32 {
 	case "prq384":
 		return d.Q384[n%len(d.Q384)]
 	default:
-		return d.Q128[n%len(d.Q128)]
+		return d.Q100[n%len(d.Q100)]
 	}
 }
-func search(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Case, n int) ([]milvusclient.ResultSet, error) {
+func searchOption(d Dataset, cs Case, n int) milvusclient.SearchOption {
 	c := d.Config
 	opt := milvusclient.NewSearchOption(collection(c), c.TopK, []entity.Vector{entity.FloatVector(queryVector(d, cs.Index, n))}).WithANNSField("embedding").WithFilter(cs.Filter).WithOutputFields("id").WithConsistencyLevel(entity.ClStrong)
-	if cs.Index == "ivf128" {
-		opt.WithAnnParam(index.NewIvfAnnParam(c.NProbe))
+	if cs.Index == "ivf100" {
+		opt.WithAnnParam(index.NewIvfAnnParam(c.NProbe)).
+			WithConsistencyLevel(entity.ClEventually).
+			WithIgnoreGrowing(true).
+			WithOutputFields("id", "flight_id")
 	} else {
 		opt.WithAnnParam(index.NewHNSWAnnParam(c.Ef))
 	}
-	return cli.Search(ctx, opt)
+	return opt
+}
+
+func search(ctx context.Context, cli *milvusclient.Client, d Dataset, cs Case, n int) ([]milvusclient.ResultSet, error) {
+	return cli.Search(ctx, searchOption(d, cs, n))
 }
 func validate(ctx context.Context, cli *milvusclient.Client, d Dataset, m Manifest, selected []Case) error {
 	stop := progress("validating " + d.Config.Workflow)
@@ -275,7 +282,7 @@ func exactTopK(d Dataset, cs Case) (map[int64]bool, error) {
 		v := rowVector(row, cs.Index)
 		distance := 0.0
 		for i, x := range query {
-			if cs.Index == "ivf128" {
+			if cs.Index == "ivf100" {
 				delta := float64(x) - float64(v[i])
 				distance += delta * delta
 			} else {

@@ -36,6 +36,19 @@ Choose a workflow for `setup`/`reset`/`run`, and optionally one case for `run` (
 
 For a large selectivity contrast on the same HNSW collection, run `hnsw512_not_deleted` (95% with the default config) and `hnsw512_subreddit` (1%).
 
+For the ads IVF workflow, use the dedicated profile:
+
+```sh
+go run ./tests/benchmark/cpu_comparison reset -workflow ivf -config tests/benchmark/cpu_comparison/config-ads.json
+go run ./tests/benchmark/cpu_comparison run -workflow ivf -case ivf_flights_not_deleted -duration 30 -qps 3000 -concurrency 256
+```
+
+IVF uses **100D IVF_FLAT/L2**, eventual consistency, sealed-only search (`ignore_growing=true`), and returns row and flight IDs. `config-ads.json` requests top-k 1000, nprobe 8, and 64 flight IDs, modeled on documented PAS queries and an observed mean of about 64 flight IDs per behavioral request. These are starting settings, not a complete production replay. HNSW/PRQ retain strong consistency and their existing query settings.
+
+The ads profile keeps **1% synthetic flight survival**, with 5% synthetic deletion. That fraction is uncalibrated: request flight count does not determine row survival when product counts are skewed. All synthetic queries use the same flight list; production varies request eligibility and selects a PAS shard partition. This benchmark does not reproduce that partition layout, product skew, or real embeddings. IVF may return fewer than 1000 products with these filters/probes; inspect recall as well as latency. The exact recall check remains a single-query sanity check.
+
+Rebuild old **128D IVF** collections and bundles with `reset`; they are incompatible with this workflow. Preserve their earlier results separately and label them as the original synthetic baseline. A config edit alone does not change saved run settings. This profile leaves HNSW's general `config.json` defaults unchanged.
+
 The HNSW512 and HNSW_PRQ384 workflows use inner product (`IP`) and a `STL_SORT` index for `created_time`, matching the production posts metric and timestamp-index choices. The IVF128 workflow keeps `L2`; membership filters keep inverted indexes and `is_deleted` keeps a bitmap index. After upgrading from the L2/inverted-timestamp benchmark, run `reset -workflow hnsw` and/or `reset -workflow prq` to rebuild existing collections before comparing results. Results from the old and new benchmark revisions are not directly comparable, even when their dataset checksums match.
 
 Run overrides: `-duration` (seconds, default 60), `-qps` (queries per second, default 1000), and `-concurrency` (maximum in-flight requests, default 32). Edit `config.json` before setup/reset for dataset size (`rows`, default 200000), filter selectivity, index/search settings, and `warmup_seconds` (default 10, additional to measured duration). Use `-address host:19530` for another Milvus server or `-data PATH` for another bundle/results directory.

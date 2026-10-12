@@ -37,7 +37,7 @@ func TestDatasetReproducibleAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DataSHA256 != m1.DataSHA256 || len(loaded.Q128) != 3 {
+	if got.DataSHA256 != m1.DataSHA256 || len(loaded.Q100) != 3 {
 		t.Fatal("bundle round trip failed")
 	}
 	file := filepath.Join(first, "dataset.gob")
@@ -61,7 +61,7 @@ func TestWorkflowCreatesOnlyItsCasesAndVectors(t *testing.T) {
 		index    string
 	}{
 		{"hnsw", 4, "hnsw512"}, {"prq", 4, "prq384"},
-		{"ivf", 2, "ivf128"},
+		{"ivf", 2, "ivf100"},
 	} {
 		c := defaultConfig()
 		c.Workflow = tc.workflow
@@ -92,7 +92,7 @@ func TestWorkflowCreatesOnlyItsCasesAndVectors(t *testing.T) {
 		if len(queryVector(d, tc.index, 0)) != dimension(tc.index) {
 			t.Errorf("%s wrong vector dimension", tc.workflow)
 		}
-		if tc.index != "hnsw512" && len(d.Q512) != 0 || tc.index != "prq384" && len(d.Q384) != 0 || tc.index != "ivf128" && len(d.Q128) != 0 {
+		if tc.index != "hnsw512" && len(d.Q512) != 0 || tc.index != "prq384" && len(d.Q384) != 0 || tc.index != "ivf100" && len(d.Q100) != 0 {
 			t.Errorf("%s generated an unselected vector set", tc.workflow)
 		}
 	}
